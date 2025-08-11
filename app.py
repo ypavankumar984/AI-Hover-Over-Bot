@@ -1,3 +1,5 @@
+from PyQt5.QtWidgets import QApplication, QToolTip
+from PyQt5.QtGui import QClipboard
 import sys
 import os
 import pytesseract
@@ -61,15 +63,69 @@ class OCRWorker(QThread):
         except Exception as e:
             self.finished.emit(f"Error: {str(e)}")
 
-class ChatBubble(QLabel):
+class TTSWorker(QThread):
+    finished = pyqtSignal()
+
+    def __init__(self, text):
+        super().__init__()
+        self.text = text
+        self._stop_requested = False
+
+    def run(self):
+        try:
+            tts_engine.stop()
+            tts_engine.say(self.text)
+            tts_engine.runAndWait()
+        except Exception as e:
+            print("TTS Error:", e)
+        self.finished.emit()
+
+    def stop(self):
+        try:
+            tts_engine.stop()
+        except:
+            pass
+        self._stop_requested = True
+
+
+class ChatBubble(QWidget):
     def __init__(self, text, is_user=False):
-        super().__init__(text)
-        self.setWordWrap(True)
+        super().__init__()
         self.is_user = is_user
-        self.setStyleSheet(self.get_style())
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
-        self.setMaximumWidth(400)
-        self.setMargin(10)
+        self.text = text
+        self.reading = False
+        self.tts_thread = None
+
+        layout = QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        # Message label
+        self.label = QLabel(text)
+        self.label.setWordWrap(True)
+        self.label.setStyleSheet(self.get_style())
+        self.label.setMaximumWidth(350)
+        self.label.setMargin(10)
+        layout.addWidget(self.label)
+
+        if not is_user:
+            btn_layout = QVBoxLayout()
+            btn_layout.setContentsMargins(0, 0, 0, 0)
+
+            # Read aloud / stop button
+            self.read_btn = QPushButton("🔊")
+            self.read_btn.setFixedSize(28, 28)
+            self.read_btn.clicked.connect(self.toggle_read_aloud)
+
+            # Copy button
+            copy_btn = QPushButton("📋")
+            copy_btn.setFixedSize(28, 28)
+            copy_btn.clicked.connect(self.copy_text)
+
+            btn_layout.addWidget(self.read_btn)
+            btn_layout.addWidget(copy_btn)
+            layout.addLayout(btn_layout)
+
+        self.setLayout(layout)
 
     def get_style(self):
         if self.is_user:
@@ -88,6 +144,44 @@ class ChatBubble(QLabel):
                 padding: 10px;
                 font-size: 14px;
             """
+
+    def toggle_read_aloud(self):
+        if not self.reading:
+            self.start_reading()
+        else:
+            self.stop_reading()
+
+    def start_reading(self):
+        self.reading = True
+        self.read_btn.setText("⏹️")
+        self.tts_thread = TTSWorker(self.text)
+        self.tts_thread.finished.connect(self.on_tts_finished)
+        self.tts_thread.start()
+
+    def stop_reading(self):
+        if self.tts_thread and self.tts_thread.isRunning():
+            self.tts_thread.stop()
+        tts_engine.stop()
+        self.reading = False
+        self.read_btn.setText("🔊")
+
+    def on_tts_finished(self):
+        self.reading = False
+        self.read_btn.setText("🔊")
+
+    def copy_text(self):
+        text_to_copy = self.label.text()
+        QApplication.clipboard().setText(text_to_copy)
+        print("Copied:", text_to_copy)  # for debugging
+    
+    def show_copied_message(self):
+    # Temporarily change the copy button text to "Copied"
+        original_text = self.copy_button.text()
+        self.copy_button.setText("Copied")
+    
+        from PyQt5.QtCore import QTimer
+        QTimer.singleShot(1000, lambda: self.copy_button.setText(original_text))
+
 
 class FloatingChatbot(QWidget):
     def __init__(self):
@@ -112,6 +206,20 @@ class FloatingChatbot(QWidget):
         header_label.setStyleSheet("font-weight: bold; font-size: 18px;")
         header_layout.addWidget(header_label)
         header_layout.addStretch()
+        
+        # In FloatingChatbot.__init__(), in header_layout
+        minimize_btn = QPushButton("–")
+        minimize_btn.setFixedSize(28, 28)
+        minimize_btn.setStyleSheet("""
+            background: transparent;
+            font-size: 18px;
+            font-weight: bold;
+            color: #444;
+        """)
+        minimize_btn.clicked.connect(self.showMinimized)
+        minimize_btn.setCursor(Qt.PointingHandCursor)
+        header_layout.addWidget(minimize_btn)
+
 
         close_btn = QPushButton("✕")
         close_btn.setFixedSize(28, 28)
@@ -174,22 +282,6 @@ class FloatingChatbot(QWidget):
         input_layout.addWidget(self.send_btn)
 
         main_layout.addLayout(input_layout)
-
-        # Voice output toggle button
-        self.voice_output_enabled = True
-        self.voice_toggle_btn = QPushButton("🔊 Voice Output: ON")
-        self.voice_toggle_btn.setCheckable(True)
-        self.voice_toggle_btn.setChecked(True)
-        self.voice_toggle_btn.setStyleSheet("""
-            background-color: #2563eb;
-            color: white;
-            padding: 10px 20px;
-            border-radius: 8px;
-            font-weight: bold;
-            margin-top: 8px;
-        """)
-        self.voice_toggle_btn.clicked.connect(self.toggle_voice_output)
-        main_layout.addWidget(self.voice_toggle_btn)
 
         # Capture screen button
         self.capture_btn = QPushButton("📸 Capture Screen & Summarize")
@@ -254,7 +346,7 @@ class FloatingChatbot(QWidget):
             self.thinking_bubble = ChatBubble("🤔 Thinking...", is_user=False)
             self.chat_area.addWidget(self.thinking_bubble)
         else:
-            self.thinking_bubble.setText("🤔 Thinking...")
+            self.thinking_bubble.label.setText("🤔 Thinking...")
         QTimer.singleShot(50, self.scroll_to_bottom)
 
         self.worker = OCRWorker(question)
@@ -263,19 +355,13 @@ class FloatingChatbot(QWidget):
 
     def display_response(self, text):
         if self.thinking_bubble:
-            self.thinking_bubble.setText(f"🤖 AI: {text}")
+            self.thinking_bubble.label.setText(f"🤖 AI: {text}")
+
             self.thinking_bubble = None
+
         else:
             self.add_ai_message(text)
         QTimer.singleShot(50, self.scroll_to_bottom)
-
-        # Text-to-speech if enabled
-        if self.voice_output_enabled:
-            try:
-                tts_engine.say(text)
-                tts_engine.runAndWait()
-            except Exception as e:
-                print("TTS Error:", e)
 
     def toggle_listening(self):
         if not self.listening:
@@ -312,14 +398,6 @@ class FloatingChatbot(QWidget):
             self.add_user_message(result)
             self.start_worker(result)
         self.stop_listening()
-
-    def toggle_voice_output(self):
-        self.voice_output_enabled = not self.voice_output_enabled
-        if self.voice_output_enabled:
-            self.voice_toggle_btn.setText("🔊 Voice Output: ON")
-        else:
-            self.voice_toggle_btn.setText("🔇 Voice Output: OFF")
-            tts_engine.stop()
 
     def closeEvent(self, event):
         # Stop any ongoing TTS on close
