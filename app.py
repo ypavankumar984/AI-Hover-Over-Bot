@@ -87,6 +87,33 @@ class TTSWorker(QThread):
             pass
         self._stop_requested = True
 
+# --- Read Aloud Manager ---
+class ReadAloudManager:
+    current_engine = None
+    current_bubble = None
+
+    @classmethod
+    def start(cls, bubble, text):
+        cls.stop()  # stop any existing playback
+        import pyttsx3, threading
+        cls.current_engine = pyttsx3.init()
+        cls.current_bubble = bubble
+
+        def run():
+            cls.current_engine.say(text)
+            cls.current_engine.runAndWait()
+            bubble.read_finished()
+
+        threading.Thread(target=run, daemon=True).start()
+
+    @classmethod
+    def stop(cls):
+        if cls.current_engine:
+            cls.current_engine.stop()
+            cls.current_engine = None
+            if cls.current_bubble:
+                cls.current_bubble.read_finished()
+                cls.current_bubble = None
 
 class ChatBubble(QWidget):
     def __init__(self, text, is_user=False):
@@ -146,10 +173,13 @@ class ChatBubble(QWidget):
             """
 
     def toggle_read_aloud(self):
-        if not self.reading:
-            self.start_reading()
+        if not getattr(self, "is_reading", False):
+            self.is_reading = True
+            self.read_btn.setText("⏹")  # change icon/text when reading
+            ReadAloudManager.start(self, self.text)
         else:
-            self.stop_reading()
+            ReadAloudManager.stop()
+
 
     def start_reading(self):
         self.reading = True
@@ -181,7 +211,18 @@ class ChatBubble(QWidget):
     
         from PyQt5.QtCore import QTimer
         QTimer.singleShot(1000, lambda: self.copy_button.setText(original_text))
-
+    
+    def toggle_read_aloud(self):
+        if not getattr(self, "is_reading", False):
+            self.is_reading = True
+            self.read_btn.setText("⏹")  # change icon/text when reading
+            ReadAloudManager.start(self, self.text)
+        else:
+            ReadAloudManager.stop()
+    
+    def read_finished(self):
+        self.is_reading = False
+        self.read_btn.setText("🔊")  # reset icon/text
 
 class FloatingChatbot(QWidget):
     def __init__(self):
