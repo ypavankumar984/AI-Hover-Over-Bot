@@ -1,4 +1,4 @@
-# 🧪 Smart Online AI Shopping Assistant (Experimental)
+# 🧪 AI-Hover-Over-Bot (Experimental)
 
 > ⚠️ **Experimental Model**  
 > This application is in an **experimental stage** and may contain unstable or incomplete features.  
